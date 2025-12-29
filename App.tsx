@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { AppStep, GenerationResult, GenerationOptions, HistoryItem } from './types';
 import InputStep from './components/InputStep';
@@ -6,7 +7,13 @@ import ResultsStep from './components/ResultsStep';
 import PreviewPanel from './components/PreviewPanel';
 import HistorySidebar from './components/HistorySidebar';
 import { generateContent } from './services/geminiService';
-import { Edit3, MonitorPlay, Settings, Key, X, AlertCircle, CheckCircle, Loader2, Wifi, Smartphone, Globe, ArrowRight, Dog, History, Heart, PawPrint } from 'lucide-react';
+import { Edit3, MonitorPlay, Settings, Key, X, AlertCircle, CheckCircle, Loader2, Dog, History, Heart, PawPrint, Sparkles, Clock } from 'lucide-react';
+
+// Use local interface and casting to avoid global namespace conflicts
+interface AIStudio {
+  hasSelectedApiKey(): Promise<boolean>;
+  openSelectKey(): Promise<void>;
+}
 
 const App: React.FC = () => {
   const [step, setStep] = useState<AppStep>(AppStep.INPUT);
@@ -27,9 +34,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-      const aistudio = (window as any).aistudio;
-      if (aistudio) {
-        const selected = await aistudio.hasSelectedApiKey();
+      const aiStudio = (window as any).aistudio as AIStudio | undefined;
+      if (aiStudio) {
+        const selected = await aiStudio.hasSelectedApiKey();
         setHasKey(selected);
       }
     };
@@ -96,17 +103,17 @@ const App: React.FC = () => {
   };
 
   const handleOpenKeyDialog = async () => {
-    const aistudio = (window as any).aistudio;
-    if (aistudio) {
-      await aistudio.openSelectKey();
+    const aiStudio = (window as any).aistudio as AIStudio | undefined;
+    if (aiStudio) {
+      await aiStudio.openSelectKey();
       setHasKey(true);
       setIsSettingsOpen(false);
     }
   };
 
   const handleConfirm = async () => {
-    const aistudio = (window as any).aistudio;
-    const isKeySelected = aistudio ? await aistudio.hasSelectedApiKey() : false;
+    const aiStudio = (window as any).aistudio as AIStudio | undefined;
+    const isKeySelected = aiStudio ? await aiStudio.hasSelectedApiKey() : false;
     if (!isKeySelected) {
       await handleOpenKeyDialog();
     }
@@ -183,13 +190,29 @@ const App: React.FC = () => {
             {step === AppStep.INPUT && <InputStep value={draftText} onChange={setDraftText} onNext={handleInputNext} />}
             {step === AppStep.CONFIRMATION && <ConfirmationStep onConfirm={handleConfirm} onEdit={() => setStep(AppStep.INPUT)} />}
             {step === AppStep.GENERATING && (
-              <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
+              <div className="flex flex-col items-center justify-center min-h-[60vh] text-center animate-fadeIn">
                 <div className="relative mb-8">
                    <div className="w-24 h-24 border-4 border-orange-100 border-t-orange-400 rounded-full animate-spin"></div>
                    <div className="absolute inset-0 flex items-center justify-center"><PawPrint size={32} className="text-orange-400 animate-bounce" /></div>
                 </div>
-                <h3 className="text-2xl font-display text-stone-800 mb-2">스토리 앨범 제작 중... 🐾</h3>
-                <p className="text-stone-500 text-sm">최대 20장의 고화질 장면을 구성하고 있어요!</p>
+                <h3 className="text-2xl font-display text-stone-800 mb-2">마스터피스 제작 중... 🐾</h3>
+                
+                <div className="bg-white p-4 rounded-2xl border border-orange-100 shadow-sm max-w-xs mx-auto mt-4 space-y-3">
+                   <div className="flex items-center gap-3 text-left">
+                      <div className="bg-orange-50 p-2 rounded-lg text-orange-500"><Sparkles size={18}/></div>
+                      <div>
+                        <p className="text-xs font-bold text-stone-700">20장의 시네마틱 컷</p>
+                        <p className="text-[10px] text-stone-400">8K 고화질로 렌더링 중입니다.</p>
+                      </div>
+                   </div>
+                   <div className="flex items-center gap-3 text-left">
+                      <div className="bg-pink-50 p-2 rounded-lg text-pink-500"><Clock size={18}/></div>
+                      <div>
+                        <p className="text-xs font-bold text-stone-700">약 1분 소요됩니다</p>
+                        <p className="text-[10px] text-stone-400">잠시만 기다려주세요!</p>
+                      </div>
+                   </div>
+                </div>
               </div>
             )}
             {step === AppStep.RESULTS && results && <ResultsStep data={results} onReset={() => setStep(AppStep.INPUT)} />}
