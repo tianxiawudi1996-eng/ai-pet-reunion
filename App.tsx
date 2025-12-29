@@ -54,6 +54,7 @@ const App: React.FC = () => {
   }, []);
 
   const saveToHistory = (data: GenerationResult, source: string) => {
+    // CRITICAL: Strip base64 images before saving to localStorage to avoid QuotaExceededError
     const textOnlyResult = {
       ...data,
       imagePrompts: data.imagePrompts.map(prompt => ({
