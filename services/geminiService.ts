@@ -11,7 +11,7 @@ const generationSchema = {
       type: Type.OBJECT,
       properties: {
         name: { type: Type.STRING },
-        subInfo: { type: Type.STRING, description: "Missing Date, Birthday, or Passing Date" },
+        subInfo: { type: Type.STRING },
         location: { type: Type.STRING },
         breedAndFeatures: { type: Type.STRING },
         situation: { type: Type.STRING },
@@ -64,6 +64,9 @@ const generationSchema = {
     },
     imagePrompts: {
       type: Type.ARRAY,
+      description: "MANDATORY: Generate exactly 20 distinct scenes for the storyboard.",
+      minItems: 20,
+      maxItems: 20,
       items: {
         type: Type.OBJECT,
         properties: {
@@ -82,123 +85,129 @@ const generationSchema = {
   ],
 };
 
-const getApiKey = (providedKey?: string) => {
-  const key = providedKey || process.env.API_KEY;
-  if (!key) throw new Error("Gemini API Key가 필요합니다. 설정(Settings) 메뉴에서 키를 입력해주세요.");
+const getApiKey = () => {
+  const key = process.env.API_KEY;
+  if (!key) throw new Error("API_KEY environment variable is not set.");
   return key;
 };
 
-export const validateApiKey = async (apiKey: string): Promise<boolean> => {
-  if (!apiKey) return false;
-  try {
-    const ai = new GoogleGenAI({ apiKey });
-    await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: "ping",
-    });
-    return true;
-  } catch (e) {
-    console.error("API Key Validation Failed:", e);
-    throw e;
+// Helper for batch processing to avoid rate limits
+async function processInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  processItem: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(processItem));
+    results.push(...batchResults);
   }
-};
-
-export const analyzeYoutubeContent = async (rawText: string, providedKey?: string): Promise<string> => {
-  const apiKey = getApiKey(providedKey);
-  const ai = new GoogleGenAI({ apiKey });
-  
-  const response = await ai.models.generateContent({
-    model: "gemini-3-pro-preview",
-    contents: `이 텍스트는 반려동물 관련 스토리(실종, 추모, 일상, 성장, 또는 입양 홍보)입니다. 
-    이 텍스트에서 반려동물의 이름, 품종, 주요 날짜(생일, 실종일, 별이 된 날 등), 장소, 신체 특징, 그리고 주인의 감정이나 메시지를 추출하여 
-    "한 편의 완성된 사연" 형태로 다시 작성해주세요. 
-    불필요한 인사는 생략하고 팩트와 감정선 위주로 정리하세요.
-    
-    데이터:\n${rawText}`,
-    config: {
-      temperature: 0.7,
-      topP: 0.95,
-    }
-  });
-
-  return response.text || "분석 결과가 없습니다.";
-};
+  return results;
+}
 
 export const generateContent = async (options: GenerationOptions): Promise<GenerationResult> => {
-  const apiKey = getApiKey(options.apiKey);
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
-  const musicDirectives = `MUSIC_STUDIO_SETTINGS: [Genre: ${options.musicSettings.genre}, Mood: ${options.musicSettings.mood}, Instruments: ${options.musicSettings.instruments}, Tempo: ${options.musicSettings.tempo}]. MANUAL_OVERRIDE: ${options.manualMusicStyle || 'None'}`;
+  // 1. Prepare Content for Text/Lyrics Generation (Multimodal)
+  const parts: any[] = [];
   
-  const visualDirectives = `VISUAL_STUDIO_SETTINGS: [Lighting: ${options.visualSettings.lighting}, Angle: ${options.visualSettings.angle}, Background: ${options.visualSettings.background}, Style: ${options.visualSettings.style}]. MANUAL_OVERRIDE: ${options.manualVisualStyle || 'None'}`;
+  // Add reference images to the context so the AI can "see" the pet
+  if (options.referenceImages && options.referenceImages.length > 0) {
+    options.referenceImages.forEach(base64 => {
+      parts.push({ inlineData: { data: base64, mimeType: 'image/png' } });
+    });
+  }
 
-  let promptContent = `TASK_CATEGORY: ${options.category}\n\n`;
-  promptContent += `SOURCE_TEXT (Pet Info):\n${options.sourceText}\n\n`;
-  promptContent += `USER_DIRECTIVES:\n${musicDirectives}\n${visualDirectives}\n`;
-  
+  const producerBrief = `
+    [REQUEST FROM LABEL EXECUTIVE]
+    Target Category: ${options.category} (${options.category === 'MISSING' ? 'URGENT' : 'EMOTIONAL'})
+    Source Data: ${options.sourceText}
+
+    [MANDATORY REQUIREMENTS]
+    1. **Lyrics:** Create a full 4-minute song structure. REPEAT THE CHORUS LYRICS EXPLICITLY. Do not use shortcuts like "(x2)".
+    2. **Vision:** Analyze the provided images (if any) and incorporate specific visual details (fur color, eyes, specific items) into the lyrics and story.
+    3. **Visuals:** Generate exactly 20 storyboard scenes.
+    4. **Tone:** Apply the specific "CATEGORY-SPECIFIC DIRECTION" from the System Instruction strictly.
+    
+    Make this a masterpiece.
+  `;
+  parts.push({ text: producerBrief });
+
+  // 2. Generate JSON (Lyrics & Storyboard)
   const textResponse = await ai.models.generateContent({
     model: "gemini-3-pro-preview",
-    contents: promptContent,
+    contents: { parts }, // Now includes images + text
     config: {
       systemInstruction: SYSTEM_INSTRUCTION,
       responseMimeType: "application/json",
       responseSchema: generationSchema,
-      thinkingConfig: { thinkingBudget: 4000 }
+      thinkingConfig: { thinkingBudget: 32768 }
     },
   });
 
   const result = JSON.parse(textResponse.text!) as GenerationResult;
 
+  // 3. Generate 20 Images (Batched for stability)
   if (options.autoGenerateImages && result.imagePrompts) {
-    // Adjusted visual modifier based on 5 categories
-    let categoryModifier = "";
-    if (options.category === "RAINBOW") categoryModifier = "Ethereal, soft lighting, memorial, dreamy atmosphere, glowing.";
-    else if (options.category === "TOGETHER") categoryModifier = "Bright, sunny, playful, cute, high saturation.";
-    else if (options.category === "GROWTH") categoryModifier = "Warm nostalgic, scrapbook style, soft focus, timeline progression.";
-    else if (options.category === "ADOPTION") categoryModifier = "Bright studio lighting, eye contact, charming, clean background, hopeful.";
-    else categoryModifier = "Realistic, urgent, high contrast, clear details."; // MISSING
-
-    const visualMod = `Visual Directive: ${visualDirectives}. Category Mood: ${categoryModifier}. Negative Prompt: human face, distorted, text, watermark, blurry, deformed paws, extra limbs. Focus on the animal character consistency.`;
+    const targetPrompts = result.imagePrompts.slice(0, 20);
     
-    const imagePromises = result.imagePrompts.slice(0, 20).map(async (promptData) => {
+    // Process 4 images at a time to be safe
+    const generatedImages = await processInBatches(targetPrompts, 4, async (promptData) => {
       try {
-        const genAI = new GoogleGenAI({ apiKey });
-        const parts: any[] = [];
+        const genAI = new GoogleGenAI({ apiKey: getApiKey() });
+        const imgParts: any[] = [];
+        
+        // Use reference images for style consistency in generated images too
         if (options.referenceImages && options.referenceImages.length > 0) {
           options.referenceImages.forEach(base64 => {
-            parts.push({
-              inlineData: { data: base64, mimeType: 'image/png' }
-            });
+            imgParts.push({ inlineData: { data: base64, mimeType: 'image/png' } });
           });
         }
-        parts.push({ text: `${promptData.imagePromptEN}. ${visualMod}. Style Keywords: ${promptData.styleKeywords}` });
+        
+        // Enhanced Prompt
+        imgParts.push({ text: `${promptData.imagePromptEN}. Masterpiece, Cinematic Lighting, 8K, Highly Detailed, Photorealistic. Style: ${promptData.styleKeywords}` });
 
         const imgResponse = await genAI.models.generateContent({
           model: 'gemini-3-pro-image-preview',
-          contents: { parts },
+          contents: { parts: imgParts },
           config: {
-            imageConfig: {
-              aspectRatio: options.aspectRatio,
-              imageSize: "1K"
-            }
+            imageConfig: { aspectRatio: options.aspectRatio, imageSize: "1K" }
           }
         });
 
         for (const part of imgResponse.candidates?.[0]?.content?.parts || []) {
           if (part.inlineData) return part.inlineData.data;
         }
-      } catch (e) {
-        console.error("Image generation failed:", e);
+      } catch (e: any) {
+        console.error("Scene generation failed:", e);
+        // Don't throw, just return undefined so partial results are possible
       }
       return undefined;
     });
 
-    const generatedImages = await Promise.all(imagePromises);
-    result.imagePrompts = result.imagePrompts.map((p, i) => ({
+    result.imagePrompts = targetPrompts.map((p, i) => ({
       ...p,
       generatedImage: generatedImages[i]
     }));
   }
 
   return result;
+};
+
+export const validateApiKey = async (): Promise<boolean> => {
+  try {
+    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+    await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: "ping" });
+    return true;
+  } catch { return false; }
+};
+
+export const analyzeYoutubeContent = async (rawText: string): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const response = await ai.models.generateContent({
+    model: "gemini-3-pro-preview",
+    contents: `Extract the full emotional narrative for a 4-minute epic song:\n${rawText}`
+  });
+  return response.text || "No result.";
 };
