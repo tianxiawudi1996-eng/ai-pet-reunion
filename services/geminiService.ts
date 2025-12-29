@@ -91,7 +91,7 @@ const getApiKey = () => {
   return key;
 };
 
-// Helper for batch processing to avoid rate limits
+// Helper for batch processing to avoid rate limits and improve stability
 async function processInBatches<T, R>(
   items: T[],
   batchSize: number,
@@ -112,7 +112,7 @@ export const generateContent = async (options: GenerationOptions): Promise<Gener
   // 1. Prepare Content for Text/Lyrics Generation (Multimodal)
   const parts: any[] = [];
   
-  // Add reference images to the context so the AI can "see" the pet
+  // Add reference images to the context so the AI can "see" the pet for lyrics/story
   if (options.referenceImages && options.referenceImages.length > 0) {
     options.referenceImages.forEach(base64 => {
       parts.push({ inlineData: { data: base64, mimeType: 'image/png' } });
@@ -152,7 +152,7 @@ export const generateContent = async (options: GenerationOptions): Promise<Gener
   if (options.autoGenerateImages && result.imagePrompts) {
     const targetPrompts = result.imagePrompts.slice(0, 20);
     
-    // Process 4 images at a time to be safe
+    // Process 4 images at a time to prevent browser/API timeout
     const generatedImages = await processInBatches(targetPrompts, 4, async (promptData) => {
       try {
         const genAI = new GoogleGenAI({ apiKey: getApiKey() });
@@ -165,7 +165,7 @@ export const generateContent = async (options: GenerationOptions): Promise<Gener
           });
         }
         
-        // Enhanced Prompt
+        // Enhanced Prompt for 8K Quality
         imgParts.push({ text: `${promptData.imagePromptEN}. Masterpiece, Cinematic Lighting, 8K, Highly Detailed, Photorealistic. Style: ${promptData.styleKeywords}` });
 
         const imgResponse = await genAI.models.generateContent({
@@ -181,7 +181,7 @@ export const generateContent = async (options: GenerationOptions): Promise<Gener
         }
       } catch (e: any) {
         console.error("Scene generation failed:", e);
-        // Don't throw, just return undefined so partial results are possible
+        // Return undefined to continue even if one image fails
       }
       return undefined;
     });
