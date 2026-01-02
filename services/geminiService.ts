@@ -85,10 +85,15 @@ const generationSchema = {
   ],
 };
 
+// UPDATED: Check process.env first, then localStorage for deployed apps
 const getApiKey = () => {
-  const key = process.env.API_KEY;
-  if (!key) throw new Error("API_KEY environment variable is not set.");
-  return key;
+  const envKey = process.env.API_KEY;
+  if (envKey) return envKey;
+  
+  const localKey = localStorage.getItem("gemini_api_key");
+  if (localKey) return localKey;
+
+  throw new Error("API Key is missing. Please set it in Settings.");
 };
 
 // Helper for batch processing to avoid rate limits and improve stability
