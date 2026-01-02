@@ -6,8 +6,8 @@ import ConfirmationStep from './components/ConfirmationStep';
 import ResultsStep from './components/ResultsStep';
 import PreviewPanel from './components/PreviewPanel';
 import HistorySidebar from './components/HistorySidebar';
-import { generateContent } from './services/geminiService';
-import { Edit3, MonitorPlay, Settings, Key, X, AlertCircle, CheckCircle, Loader2, Dog, History, Heart, PawPrint, Sparkles, Clock } from 'lucide-react';
+import { generateContent, validateApiKey } from './services/geminiService';
+import { Edit3, MonitorPlay, Settings, Key, X, AlertCircle, CheckCircle, Loader2, Dog, History, Heart, PawPrint, Sparkles, Clock, Save } from 'lucide-react';
 
 // Use local interface and casting to avoid global namespace conflicts
 interface AIStudio {
@@ -31,13 +31,27 @@ const App: React.FC = () => {
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [hasKey, setHasKey] = useState<boolean>(false);
+  
+  // State for Manual API Key Input (Deployed Environment)
+  const [customKey, setCustomKey] = useState('');
+  const [isAIStudioEnv, setIsAIStudioEnv] = useState(false);
 
   useEffect(() => {
     const checkKey = async () => {
       const aiStudio = (window as any).aistudio as AIStudio | undefined;
+      
       if (aiStudio) {
+        setIsAIStudioEnv(true);
         const selected = await aiStudio.hasSelectedApiKey();
         setHasKey(selected);
+      } else {
+        // Deployed Environment: Check LocalStorage or Env
+        setIsAIStudioEnv(false);
+        const localKey = localStorage.getItem('gemini_api_key');
+        if (localKey || process.env.API_KEY) {
+          setHasKey(true);
+          setCustomKey(localKey || '');
+        }
       }
     };
     checkKey();
@@ -109,14 +123,54 @@ const App: React.FC = () => {
       await aiStudio.openSelectKey();
       setHasKey(true);
       setIsSettingsOpen(false);
+    } else {
+      // Open manual settings for deployed app
+      setIsSettingsOpen(true);
+    }
+  };
+
+  const handleSaveCustomKey = async () => {
+    if (!customKey.trim()) {
+      alert("API 키를 입력해주세요.");
+      return;
+    }
+    
+    // Temporarily save to test validation
+    localStorage.setItem('gemini_api_key', customKey.trim());
+    
+    try {
+      const isValid = await validateApiKey();
+      if (isValid) {
+        setHasKey(true);
+        setIsSettingsOpen(false);
+        alert("API 키가 성공적으로 저장되었습니다!");
+      } else {
+        throw new Error("Invalid Key");
+      }
+    } catch (e) {
+      localStorage.removeItem('gemini_api_key');
+      setHasKey(false);
+      alert("유효하지 않은 API 키입니다. 다시 확인해주세요.");
     }
   };
 
   const handleConfirm = async () => {
-    const aiStudio = (window as any).aistudio as AIStudio | undefined;
-    const isKeySelected = aiStudio ? await aiStudio.hasSelectedApiKey() : false;
-    if (!isKeySelected) {
+    // Re-check key presence before generating
+    let isKeyReady = hasKey;
+
+    if (!isKeyReady) {
+       // Try checking again (maybe env loaded late or user set it)
+       const aiStudio = (window as any).aistudio as AIStudio | undefined;
+       if (aiStudio) {
+         isKeyReady = await aiStudio.hasSelectedApiKey();
+       } else {
+         isKeyReady = !!localStorage.getItem('gemini_api_key') || !!process.env.API_KEY;
+       }
+    }
+
+    if (!isKeyReady) {
       await handleOpenKeyDialog();
+      return;
     }
 
     setStep(AppStep.GENERATING);
@@ -143,10 +197,10 @@ const App: React.FC = () => {
       setActiveView('preview');
     } catch (err: any) {
       console.error(err);
-      if (err.message && err.message.includes("Requested entity was not found.")) {
-        setError("API 키 설정이 유효하지 않습니다. 다시 설정해주세요.");
+      if (err.message && (err.message.includes("API Key is missing") || err.message.includes("Requested entity was not found"))) {
+        setError("API 키 설정이 필요합니다.");
         setHasKey(false);
-        await handleOpenKeyDialog();
+        setIsSettingsOpen(true);
       } else {
         setError(err.message || "오류가 발생했습니다.");
       }
@@ -247,21 +301,49 @@ const App: React.FC = () => {
              <div className="space-y-4 animate-fadeIn">
                <div className="bg-orange-50 p-4 rounded-xl border border-orange-100">
                   <p className="text-sm text-stone-700 font-medium mb-2">Google Gemini API 설정</p>
-                  <p className="text-xs text-stone-500 leading-relaxed mb-4">
-                    비디오 및 고화질 이미지 생성을 위해 유료 프로젝트의 API 키 선택이 필요합니다. 
-                    <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-orange-500 ml-1 underline">결제 문서 확인</a>
-                  </p>
-                  <button 
-                    onClick={handleOpenKeyDialog} 
-                    className="w-full py-3 bg-orange-400 text-white rounded-xl font-bold flex items-center justify-center gap-2"
-                  >
-                    <Key size={18} /> API 키 선택하기
-                  </button>
-                  {hasKey && <p className="mt-2 text-[10px] text-green-600 font-bold flex items-center gap-1"><CheckCircle size={10}/> 키가 선택되었습니다.</p>}
+                  
+                  {isAIStudioEnv ? (
+                    <>
+                      <p className="text-xs text-stone-500 leading-relaxed mb-4">
+                        비디오 및 고화질 이미지 생성을 위해 유료 프로젝트의 API 키 선택이 필요합니다. 
+                        <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-orange-500 ml-1 underline">결제 문서 확인</a>
+                      </p>
+                      <button 
+                        onClick={handleOpenKeyDialog} 
+                        className="w-full py-3 bg-orange-400 text-white rounded-xl font-bold flex items-center justify-center gap-2"
+                      >
+                        <Key size={18} /> API 키 선택하기
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-stone-500 leading-relaxed mb-4">
+                        Google AI Studio에서 발급받은 API 키를 입력해주세요.
+                        <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-orange-500 ml-1 underline block mt-1">🔑 API 키 발급받기</a>
+                      </p>
+                      <div className="flex flex-col gap-3">
+                        <input 
+                          type="password" 
+                          value={customKey}
+                          onChange={(e) => setCustomKey(e.target.value)}
+                          placeholder="AIza..."
+                          className="w-full p-3 border border-stone-200 rounded-xl text-sm focus:border-orange-400 outline-none"
+                        />
+                        <button 
+                          onClick={handleSaveCustomKey} 
+                          className="w-full py-3 bg-orange-400 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-orange-500 transition-colors"
+                        >
+                          <Save size={18} /> 저장하고 시작하기
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {hasKey && <p className="mt-3 text-[10px] text-green-600 font-bold flex items-center gap-1"><CheckCircle size={10}/> 키가 설정되어 있습니다.</p>}
                </div>
                <div className="pt-2">
                  <p className="text-[10px] text-stone-400 leading-relaxed uppercase tracking-tighter">
-                   주의: 히스토리는 브라우저 로컬 저장소에 텍스트 정보만 저장됩니다. 생성된 이미지는 결과 화면에서 즉시 다운로드하세요.
+                   주의: API 키와 히스토리는 브라우저 로컬 저장소에 저장됩니다. 개인 기기에서만 사용하세요.
                  </p>
                </div>
              </div>
